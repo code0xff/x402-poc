@@ -36,7 +36,7 @@ if (!evmNetwork) {
   process.exit(1);
 }
 
-const port = parseInt(process.env.PORT || "4022", 10);
+const port = parseInt(process.env.PORT || "4023", 10);
 
 /**
  * Simulates fetching weather data for a city.

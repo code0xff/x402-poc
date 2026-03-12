@@ -15,7 +15,7 @@ cp .env-local .env
 
 2. Fill required values:
 - `EVM_PRIVATE_KEY`
-- `MCP_SERVER_URL` (optional, default `http://localhost:4022`)
+- `MCP_SERVER_URL` (optional, default `http://localhost:4023`)
 - `EVM_NETWORK` (example: `eip155:84532`)
 
 3. Install dependencies:

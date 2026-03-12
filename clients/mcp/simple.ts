@@ -21,7 +21,7 @@ if (!evmPrivateKey) {
   process.exit(1);
 }
 
-const serverUrl = process.env.MCP_SERVER_URL || "http://localhost:4022";
+const serverUrl = process.env.MCP_SERVER_URL || "http://localhost:4023";
 const evmNetwork = process.env.EVM_NETWORK;
 if (!evmNetwork) {
   console.error("❌ EVM_NETWORK environment variable is required");

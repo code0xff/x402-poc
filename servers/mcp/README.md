@@ -14,7 +14,7 @@ cp .env-local .env
 - `EVM_ADDRESS`
 - `FACILITATOR_URL`
 - `EVM_NETWORK` (example: `eip155:84532`)
-- `PORT` (optional, default `4022`)
+- `PORT` (optional, default `4023`)
 
 3. Install dependencies:
 
