@@ -9,8 +9,10 @@
 
 import { config } from "dotenv";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { toClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { createx402MCPClient } from "@x402/mcp";
+import { type Chain, createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 config();
@@ -28,6 +30,39 @@ if (!evmNetwork) {
   process.exit(1);
 }
 
+const evmRpcUrl = process.env.EVM_RPC_URL;
+if (!evmRpcUrl) {
+  console.error("❌ EVM_RPC_URL environment variable is required");
+  process.exit(1);
+}
+const evmRpcUrlRequired: string = evmRpcUrl;
+
+const evmChainIdRaw = process.env.EVM_CHAIN_ID;
+if (!evmChainIdRaw) {
+  console.error("❌ EVM_CHAIN_ID environment variable is required");
+  process.exit(1);
+}
+
+const evmChainId = Number(evmChainIdRaw);
+if (!Number.isInteger(evmChainId) || evmChainId <= 0) {
+  console.error("❌ EVM_CHAIN_ID must be a positive integer");
+  process.exit(1);
+}
+
+const evmNetworkMatch = /^eip155:(\d+)$/.exec(evmNetwork);
+if (!evmNetworkMatch) {
+  console.error("❌ EVM_NETWORK must match eip155:<chainId> format");
+  process.exit(1);
+}
+
+const evmNetworkChainId = Number(evmNetworkMatch[1]);
+if (evmNetworkChainId !== evmChainId) {
+  console.error(
+    `❌ EVM_NETWORK (${evmNetwork}) and EVM_CHAIN_ID (${evmChainId}) must reference the same chain`,
+  );
+  process.exit(1);
+}
+
 /**
  * Demonstrates the simple API using createx402MCPClient factory.
  *
@@ -37,8 +72,22 @@ export async function main(): Promise<void> {
   console.log("\n📦 Using SIMPLE API (createx402MCPClient factory)\n");
   console.log("🔌 Connecting to MCP server at:", serverUrl);
 
-  const evmSigner = privateKeyToAccount(evmPrivateKey);
-  console.log("💳 Using wallet:", evmSigner.address);
+  const account = privateKeyToAccount(evmPrivateKey);
+  const chain: Chain = {
+    id: evmChainId,
+    name: `evm-${evmChainId}`,
+    nativeCurrency: { name: "WKRC", symbol: "WKRC", decimals: 18 },
+    rpcUrls: {
+      default: { http: [evmRpcUrlRequired] },
+      public: { http: [evmRpcUrlRequired] },
+    },
+  };
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(evmRpcUrlRequired),
+  });
+  const evmSigner = toClientEvmSigner(account, publicClient);
+  console.log("💳 Using wallet:", account.address);
 
   // ========================================================================
   // SIMPLE: One-liner setup with factory function
