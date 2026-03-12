@@ -30,7 +30,7 @@ if (!facilitatorUrl) {
   process.exit(1);
 }
 
-const evmNetwork = process.env.EVM_NETWORK;
+const evmNetwork = process.env.EVM_NETWORK as `${string}:${string}`;
 if (!evmNetwork) {
   console.error("❌ EVM_NETWORK environment variable is required");
   process.exit(1);
@@ -82,8 +82,8 @@ export async function main(): Promise<void> {
     scheme: "exact",
     network: evmNetwork,
     payTo: evmAddress,
-    price: "$0.001",
-    extra: { name: "USDC", version: "2" }, // EIP-712 domain parameters
+    price: { amount: "1000000000000000000", asset: "0x0000000000000000000000000000000000001000" },
+    extra: { name: "WKRC", version: "1" }, // EIP-712 domain parameters
   });
 
   // ========================================================================

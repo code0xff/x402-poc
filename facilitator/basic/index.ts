@@ -69,7 +69,7 @@ console.info(`EVM Facilitator account: ${evmAccount.address}`);
 const chain: Chain = {
   id: evmChainId,
   name: `evm-${evmChainId}`,
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  nativeCurrency: { name: "WKRC", symbol: "WKRC", decimals: 18 },
   rpcUrls: {
     default: { http: [evmRpcUrl] },
     public: { http: [evmRpcUrl] },
