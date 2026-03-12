@@ -22,6 +22,11 @@ if (!evmPrivateKey) {
 }
 
 const serverUrl = process.env.MCP_SERVER_URL || "http://localhost:4022";
+const evmNetwork = process.env.EVM_NETWORK;
+if (!evmNetwork) {
+  console.error("❌ EVM_NETWORK environment variable is required");
+  process.exit(1);
+}
 
 /**
  * Demonstrates the simple API using createx402MCPClient factory.
@@ -41,7 +46,7 @@ export async function main(): Promise<void> {
   const x402Mcp = createx402MCPClient({
     name: "x402-mcp-client-demo",
     version: "1.0.0",
-    schemes: [{ network: "eip155:84532", client: new ExactEvmScheme(evmSigner) }],
+    schemes: [{ network: evmNetwork, client: new ExactEvmScheme(evmSigner) }],
     autoPayment: true,
     onPaymentRequested: async context => {
       const price = context.paymentRequired.accepts[0];

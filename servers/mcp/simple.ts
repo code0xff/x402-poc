@@ -30,6 +30,12 @@ if (!facilitatorUrl) {
   process.exit(1);
 }
 
+const evmNetwork = process.env.EVM_NETWORK;
+if (!evmNetwork) {
+  console.error("❌ EVM_NETWORK environment variable is required");
+  process.exit(1);
+}
+
 const port = parseInt(process.env.PORT || "4022", 10);
 
 /**
@@ -66,7 +72,7 @@ export async function main(): Promise<void> {
   // ========================================================================
   const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
   const resourceServer = new x402ResourceServer(facilitatorClient);
-  resourceServer.register("eip155:84532", new ExactEvmScheme());
+  resourceServer.register(evmNetwork, new ExactEvmScheme());
   await resourceServer.initialize();
 
   // ========================================================================
@@ -74,7 +80,7 @@ export async function main(): Promise<void> {
   // ========================================================================
   const weatherAccepts = await resourceServer.buildPaymentRequirements({
     scheme: "exact",
-    network: "eip155:84532",
+    network: evmNetwork,
     payTo: evmAddress,
     price: "$0.001",
     extra: { name: "USDC", version: "2" }, // EIP-712 domain parameters

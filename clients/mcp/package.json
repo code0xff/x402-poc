@@ -3,10 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx index.ts simple",
-    "dev:advanced": "tsx index.ts advanced",
-    "dev:chatbot": "tsx chatbot.ts",
-    "dev:openai-chatbot": "tsx openai-chatbot.ts",
+    "dev": "tsx index.ts",
     "format": "prettier -c .prettierrc --write \"**/*.{ts,js,cjs,json,md}\"",
     "format:check": "prettier -c .prettierrc --check \"**/*.{ts,js,cjs,json,md}\"",
     "lint": "eslint . --ext .ts --fix",
@@ -18,7 +15,6 @@
     "@x402/evm": "^2.6.0",
     "@x402/mcp": "^2.6.0",
     "dotenv": "^16.5.0",
-    "openai": "^4.77.3",
     "viem": "^2.39.0"
   },
   "devDependencies": {

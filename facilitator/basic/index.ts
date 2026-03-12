@@ -1,5 +1,3 @@
-import { base58 } from "@scure/base";
-import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { x402Facilitator } from "@x402/core/facilitator";
 import {
   PaymentPayload,
@@ -9,50 +7,80 @@ import {
 } from "@x402/core/types";
 import { toFacilitatorEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
-import { toFacilitatorSvmSigner } from "@x402/svm";
-import { ExactSvmScheme } from "@x402/svm/exact/facilitator";
 import dotenv from "dotenv";
 import express from "express";
-import { createWalletClient, http, publicActions } from "viem";
+import { type Chain, createWalletClient, http, publicActions } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "viem/chains";
 
 dotenv.config();
 
-// Configuration
-const PORT = process.env.PORT || "4022";
+const port = parseInt(process.env.PORT || "4022", 10);
 
-// Validate required environment variables
-if (!process.env.EVM_PRIVATE_KEY) {
+const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
+if (!evmPrivateKey) {
   console.error("❌ EVM_PRIVATE_KEY environment variable is required");
   process.exit(1);
 }
 
-if (!process.env.SVM_PRIVATE_KEY) {
-  console.error("❌ SVM_PRIVATE_KEY environment variable is required");
+const evmNetwork = process.env.EVM_NETWORK;
+if (!evmNetwork) {
+  console.error(
+    "❌ EVM_NETWORK environment variable is required (example: eip155:84532)",
+  );
   process.exit(1);
 }
 
-// Initialize the EVM account from private key
-const evmAccount = privateKeyToAccount(
-  process.env.EVM_PRIVATE_KEY as `0x${string}`,
-);
+const evmRpcUrl = process.env.EVM_RPC_URL;
+if (!evmRpcUrl) {
+  console.error("❌ EVM_RPC_URL environment variable is required");
+  process.exit(1);
+}
+
+const evmChainIdRaw = process.env.EVM_CHAIN_ID;
+if (!evmChainIdRaw) {
+  console.error("❌ EVM_CHAIN_ID environment variable is required");
+  process.exit(1);
+}
+
+const evmChainId = Number(evmChainIdRaw);
+if (!Number.isInteger(evmChainId) || evmChainId <= 0) {
+  console.error("❌ EVM_CHAIN_ID must be a positive integer");
+  process.exit(1);
+}
+
+const evmNetworkMatch = /^eip155:(\d+)$/.exec(evmNetwork);
+if (!evmNetworkMatch) {
+  console.error("❌ EVM_NETWORK must match eip155:<chainId> format");
+  process.exit(1);
+}
+
+const evmNetworkChainId = Number(evmNetworkMatch[1]);
+if (evmNetworkChainId !== evmChainId) {
+  console.error(
+    `❌ EVM_NETWORK (${evmNetwork}) and EVM_CHAIN_ID (${evmChainId}) must reference the same chain`,
+  );
+  process.exit(1);
+}
+const evmNetworkCaip = evmNetwork as `${string}:${string}`;
+
+const evmAccount = privateKeyToAccount(evmPrivateKey);
 console.info(`EVM Facilitator account: ${evmAccount.address}`);
 
-// Initialize the SVM account from private key
-const svmAccount = await createKeyPairSignerFromBytes(
-  base58.decode(process.env.SVM_PRIVATE_KEY as string),
-);
-console.info(`SVM Facilitator account: ${svmAccount.address}`);
+const chain: Chain = {
+  id: evmChainId,
+  name: `evm-${evmChainId}`,
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: {
+    default: { http: [evmRpcUrl] },
+    public: { http: [evmRpcUrl] },
+  },
+};
 
-// Create a Viem client with both wallet and public capabilities
 const viemClient = createWalletClient({
   account: evmAccount,
-  chain: baseSepolia,
-  transport: http(),
+  chain,
+  transport: http(evmRpcUrl),
 }).extend(publicActions);
-
-// Initialize the x402 Facilitator with EVM and SVM support
 
 const evmSigner = toFacilitatorEvmSigner({
   getCode: (args: { address: `0x${string}` }) => viemClient.getCode(args),
@@ -92,49 +120,15 @@ const evmSigner = toFacilitatorEvmSigner({
     viemClient.waitForTransactionReceipt(args),
 });
 
-// Facilitator can now handle all Solana networks with automatic RPC creation
-const svmSigner = toFacilitatorSvmSigner(svmAccount);
-
-const facilitator = new x402Facilitator()
-  .onBeforeVerify(async (context) => {
-    console.log("Before verify", context);
-  })
-  .onAfterVerify(async (context) => {
-    console.log("After verify", context);
-  })
-  .onVerifyFailure(async (context) => {
-    console.log("Verify failure", context);
-  })
-  .onBeforeSettle(async (context) => {
-    console.log("Before settle", context);
-  })
-  .onAfterSettle(async (context) => {
-    console.log("After settle", context);
-  })
-  .onSettleFailure(async (context) => {
-    console.log("Settle failure", context);
-  });
-
-// Register EVM and SVM schemes
+const facilitator = new x402Facilitator();
 facilitator.register(
-  "eip155:84532",
+  evmNetworkCaip,
   new ExactEvmScheme(evmSigner, { deployERC4337WithEIP6492: true }),
-); // Base Sepolia
-facilitator.register(
-  "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
-  new ExactSvmScheme(svmSigner),
-); // Devnet
+);
 
-// Initialize Express app
 const app = express();
 app.use(express.json());
 
-/**
- * POST /verify
- * Verify a payment against requirements
- *
- * Note: Payment tracking and bazaar discovery are handled by lifecycle hooks
- */
 app.post("/verify", async (req, res) => {
   try {
     const { paymentPayload, paymentRequirements } = req.body as {
@@ -148,9 +142,6 @@ app.post("/verify", async (req, res) => {
       });
     }
 
-    // Hooks will automatically:
-    // - Track verified payment (onAfterVerify)
-    // - Extract and catalog discovery info (onAfterVerify)
     const response: VerifyResponse = await facilitator.verify(
       paymentPayload,
       paymentRequirements,
@@ -165,12 +156,6 @@ app.post("/verify", async (req, res) => {
   }
 });
 
-/**
- * POST /settle
- * Settle a payment on-chain
- *
- * Note: Verification validation and cleanup are handled by lifecycle hooks
- */
 app.post("/settle", async (req, res) => {
   try {
     const { paymentPayload, paymentRequirements } = req.body;
@@ -181,10 +166,6 @@ app.post("/settle", async (req, res) => {
       });
     }
 
-    // Hooks will automatically:
-    // - Validate payment was verified (onBeforeSettle - will abort if not)
-    // - Check verification timeout (onBeforeSettle)
-    // - Clean up tracking (onAfterSettle / onSettleFailure)
     const response: SettleResponse = await facilitator.settle(
       paymentPayload as PaymentPayload,
       paymentRequirements as PaymentRequirements,
@@ -194,12 +175,10 @@ app.post("/settle", async (req, res) => {
   } catch (error) {
     console.error("Settle error:", error);
 
-    // Check if this was an abort from hook
     if (
       error instanceof Error &&
       error.message.includes("Settlement aborted:")
     ) {
-      // Return a proper SettleResponse instead of 500 error
       return res.json({
         success: false,
         errorReason: error.message.replace("Settlement aborted: ", ""),
@@ -213,11 +192,7 @@ app.post("/settle", async (req, res) => {
   }
 });
 
-/**
- * GET /supported
- * Get supported payment kinds and extensions
- */
-app.get("/supported", async (req, res) => {
+app.get("/supported", async (_req, res) => {
   try {
     const response = facilitator.getSupported();
     res.json(response);
@@ -229,8 +204,18 @@ app.get("/supported", async (req, res) => {
   }
 });
 
-// Start the server
-app.listen(parseInt(PORT), () => {
-  console.log(`🚀 Facilitator listening on http://localhost:${PORT}`);
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    network: evmNetwork,
+    chainId: evmChainId,
+  });
+});
+
+app.listen(port, () => {
+  console.log(`🚀 Facilitator listening on http://localhost:${port}`);
+  console.log(`   Network: ${evmNetwork}`);
+  console.log(`   Chain ID: ${evmChainId}`);
+  console.log(`   RPC URL: ${evmRpcUrl}`);
   console.log();
 });
