@@ -7,3 +7,15 @@ coverage
 *.log
 .DS_Store
 .pnpm-store/
+
+# TypeScript emit artifacts generated into package roots
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+
+# Keep committed JS config files tracked
+!clients/mcp/eslint.config.js
+!facilitator/basic/eslint.config.js
+!gateway/mcp/eslint.config.js
+!servers/mcp/eslint.config.js
