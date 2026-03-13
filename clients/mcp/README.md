@@ -36,3 +36,4 @@ pnpm dev
 
 - This package runs only the simple/basic flow.
 - Advanced/manual client and chatbot examples are removed.
+- Transport uses Streamable HTTP (`/mcp`) instead of deprecated SSE transport.

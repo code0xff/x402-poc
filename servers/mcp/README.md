@@ -29,8 +29,9 @@ pnpm dev
 ```
 
 Server endpoints:
-- `GET /sse`
-- `POST /messages`
+- `POST /mcp`
+- `GET /mcp`
+- `DELETE /mcp`
 - `GET /health`
 
 ## Notes

@@ -8,7 +8,7 @@
  */
 
 import { config } from "dotenv";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { toClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { createx402MCPClient } from "@x402/mcp";
@@ -108,7 +108,7 @@ export async function main(): Promise<void> {
   });
 
   // Connect using passthrough method
-  const transport = new SSEClientTransport(new URL(`${serverUrl}/sse`));
+  const transport = new StreamableHTTPClientTransport(new URL(`${serverUrl}/mcp`));
   await x402Mcp.connect(transport);
   console.log("✅ Connected to MCP server\n");
 
