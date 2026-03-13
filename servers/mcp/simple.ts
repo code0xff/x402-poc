@@ -95,14 +95,16 @@ export async function main(): Promise<void> {
   });
 
   // ========================================================================
-  // STEP 5: Register tools using native McpServer.tool() API
+  // STEP 5: Register tools using native McpServer.registerTool() API
   // ========================================================================
 
   // Paid tool - wrap handler with payment
-  mcpServer.tool(
+  mcpServer.registerTool(
     "get_weather",
-    "Get current weather for a city. Requires payment of $0.001.",
-    { city: z.string().describe("The city name to get weather for") },
+    {
+      description: "Get current weather for a city. Requires payment of $0.001.",
+      inputSchema: { city: z.string().describe("The city name to get weather for") },
+    },
     paidWeather(async (args: { city: string }) => ({
       content: [
         {
@@ -114,9 +116,13 @@ export async function main(): Promise<void> {
   );
 
   // Free tool - no wrapper needed
-  mcpServer.tool("ping", "A free health check tool", {}, async () => ({
-    content: [{ type: "text", text: "pong" }],
-  }));
+  mcpServer.registerTool(
+    "ping",
+    { description: "A free health check tool" },
+    async () => ({
+      content: [{ type: "text", text: "pong" }],
+    }),
+  );
 
   // Start Express server for Streamable HTTP transport
   startExpressServer(mcpServer, port);
