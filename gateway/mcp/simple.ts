@@ -53,6 +53,22 @@ const gatewayContextSchema = z
   })
   .strict();
 
+type UpstreamTool = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+type UpstreamToolList = {
+  tools: UpstreamTool[];
+};
+
+type SessionContext = {
+  server: McpServer;
+  transport: StreamableHTTPServerTransport;
+  createdAt: number;
+};
+
 /**
  * Main entry point for MCP gateway.
  */
@@ -91,54 +107,13 @@ export async function main(): Promise<void> {
   const orchestrator = new PaymentOrchestrator(x402Mcp, policyService, auditLogService);
   orchestrator.attachPaymentHook();
 
-  const upstreamTools = await x402Mcp.listTools();
-  const gatewayMcp = new McpServer({
-    name: "x402-gateway-mcp",
-    version: "1.0.0",
-  });
-
-  for (const tool of upstreamTools.tools) {
-    const normalizedInputSchema = normalizeInputSchema(tool.inputSchema);
-    const toolConfig: {
-      description: string;
-      inputSchema?: AnySchema;
-    } = {
-      description: `[gateway] ${tool.description || ""}`,
-      inputSchema: normalizedInputSchema,
-    };
-
-    gatewayMcp.registerTool(tool.name, toolConfig, async (args: Record<string, unknown>) => {
-      const gatewayContext = extractGatewayContext(args);
-      const result = await orchestrator.executeTool(tool.name, gatewayContext.forwardArgs, {
-        userId: gatewayContext.userId,
-        sessionId: gatewayContext.sessionId,
-      });
-
-      if (!result.ok) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                code: result.errorCode,
-                ...result.envelope,
-              }),
-            },
-          ],
-        };
-      }
-
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.envelope) }],
-      };
-    });
-  }
+  const upstreamTools = (await x402Mcp.listTools()) as UpstreamToolList;
 
   startExpressServer(
-    gatewayMcp,
     port,
     upstreamTools.tools.map((t) => t.name),
+    orchestrator,
+    upstreamTools,
   );
 }
 
@@ -239,13 +214,19 @@ function extractGatewayContext(args: Record<string, unknown>): {
 /**
  * Starts streamable HTTP MCP server with health endpoint using Express.
  *
- * @param mcpServer - Gateway MCP server.
  * @param listenPort - Service port.
  * @param tools - Exposed tool names.
+ * @param orchestrator - Gateway payment orchestration service.
+ * @param upstreamTools - Upstream tool list mirrored by this gateway.
  */
-function startExpressServer(mcpServer: McpServer, listenPort: number, tools: string[]): void {
+function startExpressServer(
+  listenPort: number,
+  tools: string[],
+  orchestrator: PaymentOrchestrator,
+  upstreamTools: UpstreamToolList,
+): void {
   const app = express();
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const sessions: Record<string, SessionContext> = {};
 
   app.use(express.json());
 
@@ -255,23 +236,29 @@ function startExpressServer(mcpServer: McpServer, listenPort: number, tools: str
       const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
 
       let transport: StreamableHTTPServerTransport;
-      if (sessionId && transports[sessionId]) {
-        transport = transports[sessionId];
+      if (sessionId && sessions[sessionId]) {
+        transport = sessions[sessionId].transport;
       } else if (!sessionId && isInitializeRequest(req.body)) {
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: randomUUID,
-          onsessioninitialized: (initializedSessionId) => {
-            transports[initializedSessionId] = transport;
-          },
-        });
+        const server = createGatewayServer(orchestrator, upstreamTools.tools);
+        const nextSession: SessionContext = {
+          server,
+          transport: new StreamableHTTPServerTransport({
+            sessionIdGenerator: randomUUID,
+            onsessioninitialized: (initializedSessionId) => {
+              sessions[initializedSessionId] = nextSession;
+            },
+          }),
+          createdAt: Date.now(),
+        };
+        transport = nextSession.transport;
         transport.onclose = () => {
           const currentSessionId = transport.sessionId;
-          if (currentSessionId && transports[currentSessionId]) {
-            delete transports[currentSessionId];
+          if (currentSessionId && sessions[currentSessionId]) {
+            delete sessions[currentSessionId];
           }
         };
 
-        await mcpServer.connect(transport);
+        await server.connect(transport);
       } else {
         res.status(400).json({
           jsonrpc: "2.0",
@@ -297,21 +284,21 @@ function startExpressServer(mcpServer: McpServer, listenPort: number, tools: str
   app.get("/mcp", async (req, res) => {
     const sessionIdHeader = req.headers["mcp-session-id"];
     const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
-    if (!sessionId || !transports[sessionId]) {
+    if (!sessionId || !sessions[sessionId]) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
-    await transports[sessionId].handleRequest(req, res);
+    await sessions[sessionId].transport.handleRequest(req, res);
   });
 
   app.delete("/mcp", async (req, res) => {
     const sessionIdHeader = req.headers["mcp-session-id"];
     const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
-    if (!sessionId || !transports[sessionId]) {
+    if (!sessionId || !sessions[sessionId]) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
-    await transports[sessionId].handleRequest(req, res);
+    await sessions[sessionId].transport.handleRequest(req, res);
   });
 
   app.get("/health", (_, res) => {
@@ -323,6 +310,60 @@ function startExpressServer(mcpServer: McpServer, listenPort: number, tools: str
     console.log(`🔌 Upstream MCP: ${upstreamUrl}/mcp`);
     console.log(`📋 Proxied tools: ${tools.join(", ")}`);
   });
+}
+
+/**
+ * Creates a gateway MCP server instance and registers proxied tools.
+ *
+ * @param orchestrator - Gateway payment orchestration service.
+ * @param tools - Upstream tools to proxy.
+ * @returns MCP server bound to the provided tools.
+ */
+function createGatewayServer(orchestrator: PaymentOrchestrator, tools: UpstreamTool[]): McpServer {
+  const gatewayMcp = new McpServer({
+    name: "x402-gateway-mcp",
+    version: "1.0.0",
+  });
+
+  for (const tool of tools) {
+    const normalizedInputSchema = normalizeInputSchema(tool.inputSchema);
+    const toolConfig: {
+      description: string;
+      inputSchema?: AnySchema;
+    } = {
+      description: `[gateway] ${tool.description || ""}`,
+      inputSchema: normalizedInputSchema,
+    };
+
+    gatewayMcp.registerTool(tool.name, toolConfig, async (args: Record<string, unknown>) => {
+      const gatewayContext = extractGatewayContext(args);
+      const result = await orchestrator.executeTool(tool.name, gatewayContext.forwardArgs, {
+        userId: gatewayContext.userId,
+        sessionId: gatewayContext.sessionId,
+      });
+
+      if (!result.ok) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                code: result.errorCode,
+                ...result.envelope,
+              }),
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.envelope) }],
+      };
+    });
+  }
+
+  return gatewayMcp;
 }
 
 /**

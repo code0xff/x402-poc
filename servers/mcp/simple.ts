@@ -8,6 +8,7 @@
  */
 
 import { config } from "dotenv";
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -39,6 +40,12 @@ if (!evmNetwork) {
 
 const port = parseInt(process.env.PORT || "4023", 10);
 
+type SessionContext = {
+  server: McpServer;
+  transport: StreamableHTTPServerTransport;
+  createdAt: number;
+};
+
 /**
  * Simulates fetching weather data for a city.
  *
@@ -59,14 +66,6 @@ function getWeatherData(city: string): { city: string; weather: string; temperat
  */
 export async function main(): Promise<void> {
   console.log("\n📦 Using Payment Wrapper API\n");
-
-  // ========================================================================
-  // STEP 1: Create standard MCP server
-  // ========================================================================
-  const mcpServer = new McpServer({
-    name: "x402 Weather Service",
-    version: "1.0.0",
-  });
 
   // ========================================================================
   // STEP 2: Set up x402 resource server for payment handling
@@ -94,49 +93,48 @@ export async function main(): Promise<void> {
     accepts: weatherAccepts,
   });
 
-  // ========================================================================
-  // STEP 5: Register tools using native McpServer.registerTool() API
-  // ========================================================================
+  const createServer = (): McpServer => {
+    const mcpServer = new McpServer({
+      name: "x402 Weather Service",
+      version: "1.0.0",
+    });
 
-  // Paid tool - wrap handler with payment
-  mcpServer.registerTool(
-    "get_weather",
-    {
-      description: "Get current weather for a city. Requires payment of $0.001.",
-      inputSchema: { city: z.string().describe("The city name to get weather for") },
-    },
-    paidWeather(async (args: { city: string }) => ({
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(getWeatherData(args.city), null, 2),
-        },
-      ],
-    })),
-  );
+    mcpServer.registerTool(
+      "get_weather",
+      {
+        description: "Get current weather for a city. Requires payment of 10 KRW.",
+        inputSchema: { city: z.string().describe("The city name to get weather for") },
+      },
+      paidWeather(async (args: { city: string }) => ({
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(getWeatherData(args.city), null, 2),
+          },
+        ],
+      })),
+    );
 
-  // Free tool - no wrapper needed
-  mcpServer.registerTool(
-    "ping",
-    { description: "A free health check tool" },
-    async () => ({
+    mcpServer.registerTool("ping", { description: "A free health check tool" }, async () => ({
       content: [{ type: "text", text: "pong" }],
-    }),
-  );
+    }));
+
+    return mcpServer;
+  };
 
   // Start Express server for Streamable HTTP transport
-  startExpressServer(mcpServer, port);
+  startExpressServer(createServer, port);
 }
 
 /**
  * Helper to start Express Streamable HTTP server.
  *
- * @param mcpServer - The MCP server instance
+ * @param createServer - Factory that returns a new MCP server per session
  * @param port - Port to listen on
  */
-function startExpressServer(mcpServer: McpServer, port: number): void {
+function startExpressServer(createServer: () => McpServer, port: number): void {
   const app = express();
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const sessions: Record<string, SessionContext> = {};
 
   app.use(express.json());
 
@@ -147,23 +145,29 @@ function startExpressServer(mcpServer: McpServer, port: number): void {
     try {
       let transport: StreamableHTTPServerTransport;
 
-      if (sessionId && transports[sessionId]) {
-        transport = transports[sessionId];
+      if (sessionId && sessions[sessionId]) {
+        transport = sessions[sessionId].transport;
       } else if (!sessionId && isInitializeRequest(req.body)) {
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
-          onsessioninitialized: initializedSessionId => {
-            transports[initializedSessionId] = transport;
-          },
-        });
+        const server = createServer();
+        const nextSession: SessionContext = {
+          server,
+          transport: new StreamableHTTPServerTransport({
+            sessionIdGenerator: randomUUID,
+            onsessioninitialized: initializedSessionId => {
+              sessions[initializedSessionId] = nextSession;
+            },
+          }),
+          createdAt: Date.now(),
+        };
+        transport = nextSession.transport;
         transport.onclose = () => {
           const currentSessionId = transport.sessionId;
-          if (currentSessionId && transports[currentSessionId]) {
-            delete transports[currentSessionId];
+          if (currentSessionId && sessions[currentSessionId]) {
+            delete sessions[currentSessionId];
           }
         };
 
-        await mcpServer.connect(transport);
+        await server.connect(transport);
       } else {
         res.status(400).json({
           jsonrpc: "2.0",
@@ -195,21 +199,21 @@ function startExpressServer(mcpServer: McpServer, port: number): void {
   app.get("/mcp", async (req, res) => {
     const sessionIdHeader = req.headers["mcp-session-id"];
     const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
-    if (!sessionId || !transports[sessionId]) {
+    if (!sessionId || !sessions[sessionId]) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
-    await transports[sessionId].handleRequest(req, res);
+    await sessions[sessionId].transport.handleRequest(req, res);
   });
 
   app.delete("/mcp", async (req, res) => {
     const sessionIdHeader = req.headers["mcp-session-id"];
     const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
-    if (!sessionId || !transports[sessionId]) {
+    if (!sessionId || !sessions[sessionId]) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
-    await transports[sessionId].handleRequest(req, res);
+    await sessions[sessionId].transport.handleRequest(req, res);
   });
 
   app.get("/health", (_, res) => {
