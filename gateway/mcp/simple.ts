@@ -17,6 +17,7 @@ import { z } from "zod";
 import { AuditLogService } from "./audit.js";
 import { PaymentOrchestrator } from "./orchestrator.js";
 import { PolicyService } from "./policy.js";
+import { normalizeInputSchema } from "./schema.js";
 
 config();
 
@@ -115,73 +116,6 @@ export async function main(): Promise<void> {
     orchestrator,
     upstreamTools,
   );
-}
-
-/**
- * Normalizes upstream tool input schema into a zod-compatible schema for McpServer.
- *
- * Upstream `listTools` may return JSON Schema objects, but `registerTool` expects
- * zod schema instances (or raw zod shapes). Non-zod schemas are accepted via a
- * permissive passthrough object to avoid runtime parse errors.
- *
- * @param schema - Upstream input schema.
- * @returns zod-compatible schema.
- */
-function normalizeInputSchema(schema: unknown): AnySchema | undefined {
-  if (!schema) {
-    return undefined;
-  }
-
-  if (isZodSchemaLike(schema)) {
-    return schema as AnySchema;
-  }
-
-  if (isZodRawShapeLike(schema)) {
-    return schema as AnySchema;
-  }
-
-  return z.object({}).passthrough() as unknown as AnySchema;
-}
-
-/**
- * Checks whether a value looks like a zod schema object (v3/v4 compatible).
- *
- * @param value - Value to inspect.
- * @returns True when value appears to be a zod schema.
- */
-function isZodSchemaLike(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    "_def" in candidate ||
-    "_zod" in candidate ||
-    typeof candidate.safeParse === "function" ||
-    typeof candidate.safeParseAsync === "function"
-  );
-}
-
-/**
- * Checks whether a value is a zod raw shape (object with zod schema values).
- *
- * @param value - Value to inspect.
- * @returns True when value appears to be a zod raw shape.
- */
-function isZodRawShapeLike(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const shape = value as Record<string, unknown>;
-  const keys = Object.keys(shape);
-
-  if (keys.length === 0) {
-    return true;
-  }
-
-  return Object.values(shape).every(isZodSchemaLike);
 }
 
 /**
