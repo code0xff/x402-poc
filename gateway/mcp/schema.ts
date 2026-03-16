@@ -2,6 +2,8 @@ import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { z } from "zod";
 
 type JsonSchema = Record<string, unknown>;
+type NormalizedRawShape = Record<string, z.ZodTypeAny>;
+type NormalizedInputSchema = AnySchema | NormalizedRawShape;
 
 /**
  * Normalizes upstream tool input schema into a zod-compatible schema for McpServer.
@@ -13,7 +15,7 @@ type JsonSchema = Record<string, unknown>;
  * @param schema - Upstream input schema.
  * @returns zod-compatible schema.
  */
-export function normalizeInputSchema(schema: unknown): AnySchema | undefined {
+export function normalizeInputSchema(schema: unknown): NormalizedInputSchema | undefined {
   if (!schema) {
     return undefined;
   }
@@ -23,12 +25,12 @@ export function normalizeInputSchema(schema: unknown): AnySchema | undefined {
   }
 
   if (isZodRawShapeLike(schema)) {
-    return schema as AnySchema;
+    return schema as NormalizedRawShape;
   }
 
   const converted = convertJsonSchemaObject(schema);
   if (converted) {
-    return converted as AnySchema;
+    return converted;
   }
 
   console.warn("[gateway] Falling back to permissive tool input schema because conversion failed");
@@ -41,7 +43,7 @@ export function normalizeInputSchema(schema: unknown): AnySchema | undefined {
  * @param schema - JSON Schema to convert.
  * @returns Zod raw shape for object input schemas or null when unsupported.
  */
-function convertJsonSchemaObject(schema: unknown): Record<string, AnySchema> | null {
+function convertJsonSchemaObject(schema: unknown): NormalizedRawShape | null {
   if (!isPlainObject(schema)) {
     return null;
   }
@@ -56,7 +58,7 @@ function convertJsonSchemaObject(schema: unknown): Record<string, AnySchema> | n
     Array.isArray(schema.required) ? schema.required.filter((v): v is string => typeof v === "string") : [],
   );
 
-  const shape: Record<string, AnySchema> = {};
+  const shape: NormalizedRawShape = {};
   for (const [name, propertySchema] of Object.entries(properties)) {
     const zodSchema = jsonSchemaToZod(propertySchema);
     if (!zodSchema) {
@@ -74,7 +76,7 @@ function convertJsonSchemaObject(schema: unknown): Record<string, AnySchema> | n
  * @param schema - JSON Schema node.
  * @returns Converted zod schema or null when unsupported.
  */
-function jsonSchemaToZod(schema: unknown): AnySchema | null {
+function jsonSchemaToZod(schema: unknown): z.ZodTypeAny | null {
   if (!isPlainObject(schema)) {
     return null;
   }
@@ -84,11 +86,15 @@ function jsonSchemaToZod(schema: unknown): AnySchema | null {
   }
 
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    const literals = schema.enum.map((value) => z.literal(value));
-    return literals.length === 1 ? literals[0] : z.union(literals as [typeof literals[0], ...typeof literals]);
+    const literals = schema.enum.map((value) => z.literal(value as z.Primitive));
+    if (literals.length === 1) {
+      return literals[0];
+    }
+    const [first, second, ...rest] = literals;
+    return z.union([first, second, ...rest]);
   }
 
-  if (schema.const !== undefined) {
+  if (Object.prototype.hasOwnProperty.call(schema, "const") && isJsonPrimitive(schema.const)) {
     return z.literal(schema.const);
   }
 
@@ -119,7 +125,7 @@ function jsonSchemaToZod(schema: unknown): AnySchema | null {
           : [],
       );
 
-      const shape: Record<string, AnySchema> = {};
+      const shape: NormalizedRawShape = {};
       for (const [name, propertySchema] of Object.entries(properties)) {
         const zodSchema = jsonSchemaToZod(propertySchema);
         if (!zodSchema) {
@@ -128,15 +134,15 @@ function jsonSchemaToZod(schema: unknown): AnySchema | null {
         shape[name] = required.has(name) ? zodSchema : makeOptional(zodSchema);
       }
 
-      let objectSchema = z.object(shape);
+      let objectSchema: z.ZodTypeAny = z.object(shape);
       if (schema.additionalProperties === true) {
-        objectSchema = objectSchema.passthrough();
+        objectSchema = (objectSchema as z.AnyZodObject).passthrough();
       } else if (isPlainObject(schema.additionalProperties)) {
         const additionalSchema = jsonSchemaToZod(schema.additionalProperties);
         if (!additionalSchema) {
           return null;
         }
-        objectSchema = objectSchema.catchall(additionalSchema);
+        objectSchema = (objectSchema as z.AnyZodObject).catchall(additionalSchema);
       }
 
       return objectSchema;
@@ -191,10 +197,10 @@ function isZodRawShapeLike(value: unknown): boolean {
  * @param schema - Schema to make optional.
  * @returns Optional schema where supported.
  */
-function makeOptional(schema: AnySchema): AnySchema {
-  const candidate = schema as { optional?: () => unknown };
+function makeOptional(schema: z.ZodTypeAny): z.ZodTypeAny {
+  const candidate = schema as { optional?: () => z.ZodTypeAny };
   if (typeof candidate.optional === "function") {
-    return candidate.optional() as AnySchema;
+    return candidate.optional();
   }
   return schema;
 }
@@ -228,4 +234,20 @@ function resolveJsonSchemaType(value: unknown): string | undefined {
  */
 function isPlainObject(value: unknown): value is JsonSchema {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Checks whether a value is a JSON primitive supported by z.literal.
+ *
+ * @param value - Value to inspect.
+ * @returns True when value is string/number/boolean/bigint/null.
+ */
+function isJsonPrimitive(value: unknown): value is z.Primitive {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  );
 }

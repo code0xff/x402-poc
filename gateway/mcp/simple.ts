@@ -4,7 +4,6 @@ import { config } from "dotenv";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createx402MCPClient } from "@x402/mcp";
 import { toClientEvmSigner } from "@x402/evm";
@@ -261,10 +260,7 @@ function createGatewayServer(orchestrator: PaymentOrchestrator, tools: UpstreamT
 
   for (const tool of tools) {
     const normalizedInputSchema = normalizeInputSchema(tool.inputSchema);
-    const toolConfig: {
-      description: string;
-      inputSchema?: AnySchema;
-    } = {
+    const toolConfig = {
       description: `[gateway] ${tool.description || ""}`,
       inputSchema: normalizedInputSchema,
     };
